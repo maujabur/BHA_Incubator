@@ -1,0 +1,163 @@
+/*
+This code was developed as an adaptation of the code used in the incubator available @ biohackacademy.github.io/biofactory/class/1-incubator/
+
+*  Instead of using the 4 digit 7 segment display, it was used the Liquid Crystal Display JHD 162A 16X2,
+which needs less Arduino ports and has an easyer code to show the current and target temperature.
+Liquid Crystal Display JHD 162A 16X2 Tutorial: http://blog.rastating.com/using-a-jhd162a-lcd-screen-with-an-arduino-uno/
+
+*  There is no code regarding the vent originally positioned on port 3.
+The fan was connected directly through the main switch (in parallel).
+
+*  To acquire a better statistics over the values measured by the thermistor,
+it was used an average of 20 measures with an interval of 50 miliseconds.
+
+*  The relay used in this project is actually a relay module (with built in transistor, diode, led and other electronics).
+This is the model: http://produto.mercadolivre.com.br/MLB-631328883-modulo-rele-1-canal-5vdc-250vac-arduino-pic-shield-_JM
+In order to make it work: (-) should be connected to ground, (+) should be connected to 5v and (S) should be connected to pin 10 in Arduino
+
+*/
+
+// based on previous work by Nathan Rabinovitch and http://biohackacademy.github.io/biofactory/class/1-incubator/
+// code refined by Mauricio Jabur 2015/apr/07
+
+#include <LiquidCrystal.h>
+#include "Interval.h"
+
+// to avoid noise reading the buttons (MJ)
+// http://github.com/thomasfredericks/Bounce2
+#include <Bounce2.h>
+
+// buttons
+Bounce button1 = Bounce();
+Bounce button2 = Bounce();
+int buttonPin1 = 9;
+int buttonPin2 = 8;
+
+// Define variables
+int targetTemp = 30;   // Initial target temperature
+double hysteresis = 0.5; // degrees below target before turning lamp on again (MJ)
+
+int relayPin = 10;  // Relay Pin
+int thermometer = A0;
+int ledPin = 13;
+
+LiquidCrystal lcd(12, 11, 5, 4, 3, 2); // Pins connected to the Liquid Crystal Display
+
+// moved outside the loop (MJ)
+double temp;    //Variable to hold current temperature value
+
+//  average factors (MJ)
+int historic_factor = 19; // make this one bogger for smoother readings on temperature (but worse response time)
+int reading_factor = 1;
+
+boolean heat_on = false; // (MJ)
+
+// temperature sampling interval (MJ)
+Interval sampler(50);
+
+void setup() {
+  Serial.begin(9600);
+
+  lcd.begin(16, 2);         // initializes the 16x2 LCD
+  // buttons
+  // Setup the button with an external pulldown :
+  pinMode(buttonPin1, INPUT);
+  // After setting up the button, setup the Bounce instance  (MJ)
+  button1.attach(buttonPin1);
+  button1.interval(70);
+  // Setup the button with an external pulldown :
+  pinMode(buttonPin2, INPUT);
+  // After setting up the button, setup the Bounce instance  (MJ)
+  button2.attach(buttonPin2);
+  button2.interval(70);
+
+  pinMode(relayPin, OUTPUT);
+  pinMode(ledPin, OUTPUT);
+
+  // initialize temperature reading (MJ)
+  temp = read_temp();
+}
+
+
+void loop() {
+
+  // update temperature on intervals (MJ)
+  if (sampler.check()) {
+
+    // averaging (MJ)
+    temp = (temp * historic_factor + read_temp() * reading_factor) / (historic_factor + reading_factor);
+
+    // Print current temperature
+    Serial.println(temp);
+
+    // Turn the 100W infrared light on or of depending on temperature
+
+    if (heat_on == false && temp < targetTemp - hysteresis) {
+      digitalWrite(relayPin, HIGH);
+      heat_on = true;
+    }
+    else if (heat_on == true && temp > targetTemp) {
+      digitalWrite(relayPin, LOW);
+      heat_on = false;
+    }
+
+  } // interval end
+
+  // Read the state of the pushbutton value:
+  button1.update();
+  button2.update();
+
+  // Check if the pushbutton is pressed.
+  // If it is, the buttonState is HIGH:
+  if (button1.rose() ){
+  // Sanity check, do not allow temperatures higher than 50
+  targetTemp = min(50, targetTemp + 1);
+  }
+  if (button2.rose() ){
+  // Sanity check, do not allow temperatures lower than 0
+  targetTemp = max(0, targetTemp - 1);
+  }
+  // turn LED on if any button is pressed:
+  digitalWrite(ledPin, button1.read() || button2.read());
+
+  //Functions to display current and target temperature
+  displayTemp1(temp);
+  displayTemp2(targetTemp);
+
+}//End of the program
+
+//Function to display current temperature on JHD 162A 16X2 display
+void displayTemp1(int temp) {
+
+  lcd.setCursor(0, 0);  // sets cursor at column 0 row 1
+  lcd.print("Current: ");       // prints letter c
+  lcd.print(temp);      // prints temperature in degree Celsius
+  lcd.print((char)223); // prints degree sign
+  lcd.print("C");       // prints letter c
+}
+
+//Function to display target temperature on JHD 162A 16X2 display
+void displayTemp2(int targetTemp) {
+
+  lcd.setCursor(0, 1);  // sets cursor at column 0 row 2
+  lcd.print("Target: ");       // prints letter c
+  lcd.print(targetTemp);      // prints temperature in degree Celsius
+  lcd.print((char)223); // prints degree sign
+  lcd.print("C");       // prints letter c
+
+}
+
+// temperature reading encapsulation
+inline double read_temp() {
+  return Thermister(analogRead(thermometer));
+}
+
+// Thermistor function
+double Thermister(int RawADC) {  //Function to perform the fancy math of the Steinhart-Hart equation
+  double Temp;
+  Temp = log(((10240000 / RawADC) - 10000));
+  Temp = 1 / (0.001129148 + (0.000234125 + (0.0000000876741 * Temp * Temp )) * Temp );
+  Temp = Temp - 273.15;              // Convert Kelvin to Celsius
+  //Temp = (Temp * 9.0)/ 5.0 + 32.0; // Celsius to Fahrenheit - comment out this line if you need Celsius
+  return Temp;
+}
